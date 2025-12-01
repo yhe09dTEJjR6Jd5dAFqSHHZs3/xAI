@@ -1,312 +1,204 @@
 import os
-import shutil
-import json
 import base64
 import datetime
 import threading
-import tkinter as tk
-from tkinter import filedialog, messagebox
-import requests
-from PIL import Image, ImageTk
-from tkinterdnd2 import DND_FILES, TkinterDnD
+import webbrowser
+import re
+from flask import Flask, request, jsonify, Response
 
-class CyberPunkApp(TkinterDnD.Tk):
-    def __init__(self):
-        super().__init__()
-        self.title("NEXUS DATALINK // TERMINAL V2.0")
-        self.geometry("1100x850")
-        self.configure(bg="#05080d")
-        self.base_path = r"E:\X"
-        if not os.path.exists(self.base_path):
-            os.makedirs(self.base_path)
-        
-        self.colors = {
-            "bg": "#05080d",
-            "panel": "#0a101c",
-            "fg": "#00f0ff", 
-            "fg_alt": "#ff003c", 
-            "input": "#0f1826",
-            "border": "#1c2b45",
-            "text": "#e0e0e0"
-        }
-        self.fonts = {
-            "ui": ("Consolas", 10),
-            "header": ("Consolas", 14, "bold"),
-            "mono": ("Courier New", 10)
-        }
-        
-        self.file_queue = []
-        self.setup_interface()
-        self.log_system("SYSTEM INITIALIZED. WAITING FOR INPUT...")
+app = Flask(__name__)
+BASE_PATH = r"E:\\X"
+if not os.path.exists(BASE_PATH):
+    os.makedirs(BASE_PATH)
 
-    def setup_interface(self):
-        main_frame = tk.Frame(self, bg=self.colors["bg"])
-        main_frame.pack(fill="both", expand=True, padx=15, pady=15)
+def build_history():
+    history_prompt = ""
+    try:
+        all_dirs = [os.path.join(BASE_PATH, d) for d in os.listdir(BASE_PATH)]
+        valid_dirs = [d for d in all_dirs if os.path.isdir(d)]
+        valid_dirs.sort(key=os.path.getmtime, reverse=True)
+        history_data = []
+        for d in valid_dirs[:5]:
+            try:
+                with open(os.path.join(d, "文案.txt"), "r", encoding="utf-8") as f:
+                    t = f.read().strip()[:100]
+                with open(os.path.join(d, "浏览量.txt"), "r", encoding="utf-8") as f:
+                    v = f.read().strip()
+                history_data.append(f"- 历史帖子: '{t}' | 浏览量: {v}")
+            except:
+                continue
+        if history_data:
+            history_prompt = "已归档高表现帖子:\n" + "\n".join(history_data)
+    except Exception as e:
+        history_prompt = f"历史读取失败: {e}"
+    return history_prompt
 
-        header_frame = tk.Frame(main_frame, bg=self.colors["panel"], highlightbackground=self.colors["fg"], highlightthickness=1)
-        header_frame.pack(fill="x", pady=(0, 10))
-        tk.Label(header_frame, text=":: NEURAL LINK DATA PROCESSOR ::", bg=self.colors["panel"], fg=self.colors["fg"], font=self.fonts["header"]).pack(pady=5)
+def save_text_file(path, content):
+    if content:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(str(content))
 
-        data_frame = tk.Frame(main_frame, bg=self.colors["bg"])
-        data_frame.pack(fill="x", pady=5)
+def normalize_post_id(link):
+    m = re.search(r"/status/(\d+)", link)
+    if m:
+        return m.group(1)
+    return None
 
-        self.inputs = {}
-        fields = [
-            ("LINK_URL", "link"), ("COMMENTS", "comments"), 
-            ("REPOSTS", "reposts"), ("LIKES", "likes"), 
-            ("BOOKMARKS", "bookmarks"), ("VIEWS", "views"),
-            ("POST_TIME", "post_time"), ("REC_TIME", "record_time")
-        ]
+def allowed_to_save(payload, files):
+    base_required = all(payload.get(k) for k in ["link", "comments", "reposts", "likes", "bookmarks", "views", "post_time", "record_time"])
+    if not base_required:
+        return False
+    text_present = bool(payload.get("text", "").strip())
+    img_count = len(files)
+    if img_count > 4:
+        return False
+    if text_present:
+        return True
+    return img_count >= 1
 
-        for i, (label_text, key) in enumerate(fields):
-            f = tk.Frame(data_frame, bg=self.colors["bg"])
-            f.grid(row=i//4, column=i%4, padx=5, pady=5, sticky="ew")
-            tk.Label(f, text=label_text, bg=self.colors["bg"], fg=self.colors["fg_alt"], font=self.fonts["ui"], anchor="w").pack(fill="x")
-            e = tk.Entry(f, bg=self.colors["input"], fg=self.colors["text"], insertbackground="white", relief="flat", font=self.fonts["mono"])
-            e.config(highlightbackground=self.colors["border"], highlightthickness=1)
-            e.pack(fill="x", ipady=3)
-            self.inputs[key] = e
-            data_frame.grid_columnconfigure(i%4, weight=1)
+@app.route("/")
+def index():
+    html = """
+    <!DOCTYPE html>
+    <html lang='zh-CN'>
+    <head>
+    <meta charset='UTF-8'>
+    <title>星核终端 · 生成与存档</title>
+    <style>
+    body {{ margin:0; font-family:'Microsoft Yahei', 'Consolas', monospace; background:radial-gradient(circle at 20% 20%, rgba(0,255,255,0.1), transparent 25%), radial-gradient(circle at 80% 0%, rgba(255,0,80,0.15), transparent 25%), #04070d; color:#e8f7ff; }}
+    .grid {{ display:grid; grid-template-columns:1.3fr 1fr; gap:16px; padding:20px; }}
+    .panel {{ background:linear-gradient(135deg, rgba(10,16,28,0.9), rgba(20,32,52,0.9)); border:1px solid #1f3a5b; box-shadow:0 0 18px rgba(0,255,255,0.1); border-radius:10px; padding:16px; }}
+    h1 {{ margin:0 0 12px; letter-spacing:2px; color:#6cfaff; text-shadow:0 0 8px #00e7ff; }}
+    label {{ display:block; margin-bottom:6px; color:#9ad9ff; font-size:13px; }}
+    input, textarea {{ width:100%; background:#0b1320; border:1px solid #1f3a5b; color:#e8f7ff; padding:10px; border-radius:6px; outline:none; font-family:'Consolas', monospace; }}
+    input:focus, textarea:focus {{ border-color:#00f0ff; box-shadow:0 0 8px rgba(0,240,255,0.4); }}
+    .flex {{ display:flex; gap:10px; flex-wrap:wrap; }}
+    .btn {{ flex:1; background:linear-gradient(90deg, #00e7ff, #0088ff); border:none; color:#04101c; padding:12px; border-radius:8px; cursor:pointer; font-weight:bold; letter-spacing:1px; box-shadow:0 0 12px rgba(0,231,255,0.5); transition:transform 0.15s, box-shadow 0.15s; }}
+    .btn:hover {{ transform:translateY(-1px); box-shadow:0 0 18px rgba(108,250,255,0.8); }}
+    .btn.alt {{ background:linear-gradient(90deg, #ff3f8e, #a100ff); color:#fff; box-shadow:0 0 14px rgba(255,63,142,0.6); }}
+    .label-row {{ display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }}
+    .dropzone {{ margin-top:10px; padding:14px; border:1px dashed #00e7ff; border-radius:8px; text-align:center; color:#7fe9ff; background:rgba(0,231,255,0.08); transition:all 0.2s; }}
+    .dropzone.active {{ background:rgba(0,231,255,0.18); border-color:#ff3f8e; color:#fff; }}
+    .pill {{ padding:8px 10px; background:rgba(0,0,0,0.35); border:1px solid #1f3a5b; border-radius:6px; display:flex; align-items:center; gap:8px; font-size:12px; color:#bfe9ff; }}
+    .pill span {{ color:#ff5fb7; cursor:pointer; }}
+    .log {{ background:#03060b; border:1px solid #1f3a5b; border-radius:8px; padding:10px; height:160px; overflow:auto; font-size:12px; color:#6cfaff; box-shadow:inset 0 0 10px rgba(0,231,255,0.12); }}
+    .neon-bar {{ width:100%; height:4px; background:linear-gradient(90deg, rgba(0,231,255,0.8), rgba(255,0,120,0.8), rgba(0,231,255,0.8)); margin:12px 0; box-shadow:0 0 12px rgba(0,231,255,0.4); border-radius:5px; animation:flow 4s linear infinite; }}
+    @keyframes flow {{ 0% {{ background-position:0 0; }} 100% {{ background-position:200% 0; }} }}
+    </style>
+    </head>
+    <body>
+    <div class='grid'>
+        <div class='panel'>
+            <h1>星核终端 · 创作指令</h1>
+            <label>输入文案</label>
+            <textarea id='text' rows='10' placeholder='输入或等待AI生成的文案...'></textarea>
+            <div class='dropzone' id='dropzone'>拖拽图片到这里，或点击选择文件</div>
+            <input type='file' id='fileInput' multiple accept='image/*,text/plain' style='display:none'>
+            <div class='flex' style='margin-top:10px;' id='fileList'></div>
+            <div class='neon-bar'></div>
+            <div class='flex'>
+                <button class='btn alt' onclick='runGenerate()'>AI 生成</button>
+                <button class='btn' onclick='runSave()'>存档保存</button>
+                <button class='btn' style='background:linear-gradient(90deg,#1f2937,#0f172a); color:#7fe9ff; box-shadow:none;' onclick='clearAll()'>清除输入</button>
+            </div>
+        </div>
+        <div class='panel'>
+            <h1>数据填写 · 必填</h1>
+            <div class='label-row'>
+                <div><label>帖子链接</label><input id='link' placeholder='https://x.com/Username/status/*********'></div>
+                <div><label>评论</label><input id='comments' placeholder='数字'></div>
+                <div><label>转发</label><input id='reposts' placeholder='数字'></div>
+                <div><label>点赞</label><input id='likes' placeholder='数字'></div>
+                <div><label>收藏</label><input id='bookmarks' placeholder='数字'></div>
+                <div><label>浏览量</label><input id='views' placeholder='数字'></div>
+                <div><label>帖子发布时间</label><input id='post_time' placeholder='上午12:52 · 2025年12月1日'></div>
+                <div><label>数据记录时间</label><input id='record_time' value='{now}'></div>
+            </div>
+            <div class='neon-bar'></div>
+            <div class='log' id='log'></div>
+        </div>
+    </div>
+    <script>
+    const dropzone=document.getElementById('dropzone');
+    const fileInput=document.getElementById('fileInput');
+    const fileList=document.getElementById('fileList');
+    const logBox=document.getElementById('log');
+    let selectedFiles=[];
+    function log(msg){{const time=new Date().toLocaleTimeString('zh-CN',{{hour12:false}});logBox.innerHTML=`<div>[${{time}}] ${msg}</div>`+logBox.innerHTML;}}
+    function renderFiles(){{fileList.innerHTML='';selectedFiles.forEach((f,i)=>{{const pill=document.createElement('div');pill.className='pill';pill.innerHTML=`<span onclick="removeFile(${i})">✕</span><div>${{f.name}}</div>`;fileList.appendChild(pill);}});}}
+    function removeFile(idx){{selectedFiles.splice(idx,1);renderFiles();}}
+    dropzone.addEventListener('click',()=>fileInput.click());
+    fileInput.addEventListener('change',e=>{{selectedFiles=[...selectedFiles,...Array.from(e.target.files)].slice(0,4);renderFiles();}});
+    dropzone.addEventListener('dragover',e=>{{e.preventDefault();dropzone.classList.add('active');}});
+    dropzone.addEventListener('dragleave',()=>dropzone.classList.remove('active'));
+    dropzone.addEventListener('drop',e=>{{e.preventDefault();dropzone.classList.remove('active');selectedFiles=[...selectedFiles,...Array.from(e.dataTransfer.files)].slice(0,4);renderFiles();}});
+    function clearAll(){{document.getElementById('text').value='';selectedFiles=[];renderFiles();log('已清空输入');}}
+    async function runGenerate(){{log('正在发送到本地模型...');const fd=new FormData();fd.append('text',document.getElementById('text').value);selectedFiles.forEach(f=>fd.append('files',f));const res=await fetch('/api/generate',{{method:'POST',body:fd}});const data=await res.json();if(data.success){{document.getElementById('text').value=data.content;log('AI 已返回结果');}}else{{log(data.message||'生成失败');}}}}
+    async function runSave(){{const fd=new FormData();['link','comments','reposts','likes','bookmarks','views','post_time','record_time','text'].forEach(id=>{{fd.append(id,document.getElementById(id).value);}});selectedFiles.forEach(f=>fd.append('files',f));const res=await fetch('/api/save',{{method:'POST',body:fd}});const data=await res.json();if(data.success){{log('保存成功: '+data.post_id);clearAll();}}else{{log(data.message||'保存失败');}}}}
+    </script>
+    </body>
+    </html>
+    """.format(now=datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    return Response(html, mimetype="text/html")
 
-        self.inputs["record_time"].insert(0, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
-        content_frame = tk.Frame(main_frame, bg=self.colors["bg"])
-        content_frame.pack(fill="both", expand=True, pady=10)
-
-        left_panel = tk.Frame(content_frame, bg=self.colors["panel"], highlightthickness=1, highlightbackground=self.colors["border"])
-        left_panel.pack(side="left", fill="both", expand=True, padx=(0, 5))
-        
-        tk.Label(left_panel, text=">> TEXT INPUT STREAM", bg=self.colors["panel"], fg=self.colors["fg"], anchor="w").pack(fill="x", padx=5, pady=2)
-        self.text_area = tk.Text(left_panel, bg=self.colors["input"], fg="white", insertbackground="white", relief="flat", font=self.fonts["mono"], height=10)
-        self.text_area.pack(fill="both", expand=True, padx=5, pady=5)
-
-        right_panel = tk.Frame(content_frame, bg=self.colors["panel"], highlightthickness=1, highlightbackground=self.colors["border"])
-        right_panel.pack(side="right", fill="both", expand=True, padx=(5, 0))
-
-        tk.Label(right_panel, text=">> ASSET UPLOAD (DRAG & DROP)", bg=self.colors["panel"], fg=self.colors["fg"], anchor="w").pack(fill="x", padx=5, pady=2)
-        self.file_listbox = tk.Listbox(right_panel, bg=self.colors["input"], fg=self.colors["fg"], selectbackground=self.colors["fg_alt"], relief="flat", font=self.fonts["mono"])
-        self.file_listbox.pack(fill="both", expand=True, padx=5, pady=5)
-        self.file_listbox.drop_target_register(DND_FILES)
-        self.file_listbox.dnd_bind('<<Drop>>', self.on_drop)
-        
-        btn_box = tk.Frame(right_panel, bg=self.colors["panel"])
-        btn_box.pack(fill="x", padx=5, pady=5)
-        self.mk_btn(btn_box, "[BROWSE]", self.browse_files, self.colors["border"]).pack(side="left", fill="x", expand=True, padx=2)
-        self.mk_btn(btn_box, "[CLEAR]", self.clear_files, self.colors["border"]).pack(side="left", fill="x", expand=True, padx=2)
-
-        action_frame = tk.Frame(main_frame, bg=self.colors["bg"])
-        action_frame.pack(fill="x", pady=10)
-        
-        self.mk_btn(action_frame, ">> EXECUTE: SAVE DATA <<", self.save_data, self.colors["fg"]).pack(side="left", fill="x", expand=True, padx=5)
-        self.mk_btn(action_frame, ">> EXECUTE: AI GENERATION <<", self.run_ai, self.colors["fg_alt"]).pack(side="right", fill="x", expand=True, padx=5)
-
-        log_frame = tk.Frame(main_frame, bg=self.colors["panel"], highlightthickness=1, highlightbackground=self.colors["fg"])
-        log_frame.pack(fill="x", pady=(10, 0))
-        tk.Label(log_frame, text=":: SYSTEM LOG ::", bg=self.colors["panel"], fg=self.colors["fg"], font=("Consolas", 8)).pack(anchor="w", padx=5)
-        self.log_area = tk.Text(log_frame, height=8, bg="black", fg="#00ff00", font=("Consolas", 9), state="disabled", relief="flat")
-        self.log_area.pack(fill="x", padx=5, pady=5)
-
-    def mk_btn(self, parent, text, cmd, color):
-        return tk.Button(parent, text=text, command=cmd, bg=color, fg="black", font=("Consolas", 10, "bold"), activebackground="white", relief="flat")
-
-    def log_system(self, msg):
-        self.log_area.config(state="normal")
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        self.log_area.insert("end", f"[{ts}] {msg}\n")
-        self.log_area.see("end")
-        self.log_area.config(state="disabled")
-
-    def on_drop(self, event):
-        files = self.tk.splitlist(event.data)
-        for f in files:
-            if f not in self.file_queue:
-                self.file_queue.append(f)
-                self.file_listbox.insert("end", os.path.basename(f))
-        self.log_system(f"FILES QUEUED: {len(files)} NEW ASSETS")
-
-    def browse_files(self):
-        files = filedialog.askopenfilenames()
-        for f in files:
-            if f not in self.file_queue:
-                self.file_queue.append(f)
-                self.file_listbox.insert("end", os.path.basename(f))
-
-    def clear_files(self):
-        self.file_queue = []
-        self.file_listbox.delete(0, "end")
-        self.log_system("FILE QUEUE CLEARED")
-
-    def get_assets(self):
-        imgs = []
-        txt_content = ""
-        for f in self.file_queue:
-            ext = os.path.splitext(f)[1].lower()
-            if ext in ['.jpg', '.jpeg', '.png', '.bmp', '.webp']:
-                imgs.append(f)
-            elif ext == '.txt':
-                try:
-                    with open(f, 'r', encoding='utf-8') as tf:
-                        txt_content += tf.read() + "\n"
-                except:
-                    pass
-        return imgs, txt_content
-
-    def save_data(self):
-        data = {k: v.get().strip() for k, v in self.inputs.items()}
-        
-        missing = [k for k, v in data.items() if not v]
-        if missing:
-            messagebox.showerror("ACCESS DENIED", f"MISSING FIELDS: {', '.join(missing)}")
-            return
-
+@app.route("/api/generate", methods=["POST"])
+def api_generate():
+    text = request.form.get("text", "").strip()
+    files = request.files.getlist("files")
+    imgs = []
+    for f in files:
         try:
-            link = data['link']
-            if '?' in link: link = link.split('?')[0]
-            post_id = link.rstrip('/').split('/')[-1]
-            if not post_id or not post_id.isdigit():
-                post_id = str(int(datetime.datetime.now().timestamp()))
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+            imgs.append(b64)
         except:
-            messagebox.showerror("ERROR", "INVALID LINK FORMAT")
-            return
+            continue
+    history_prompt = build_history()
+    if not text and not imgs:
+        return jsonify({"success": False, "message": "缺少生成素材"})
+    prompt = f"""系统: 你是社交媒体引流专家，以科幻风格输出。当前时间: {datetime.datetime.now()}\n历史数据:\n{history_prompt}\n输入文本:{text}\n图片数量:{len(imgs)}\n请给出有冲击力的中文文案，并预估浏览量。输出格式: 文案\n浏览量: 数字"""
+    payload = {"model": "minicpm-v", "prompt": prompt, "stream": False}
+    if imgs:
+        payload["images"] = imgs
+    try:
+        import requests
+        r = requests.post("http://localhost:11434/api/generate", json=payload, timeout=120)
+        if r.status_code == 200:
+            res = r.json()
+            content = res.get("response", "")
+            return jsonify({"success": True, "content": content})
+        return jsonify({"success": False, "message": f"HTTP {r.status_code}"})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
 
-        manual_text = self.text_area.get("1.0", "end").strip()
-        imgs, file_text = self.get_assets()
-        final_text = (manual_text + "\n" + file_text).strip()
-        
-        if not final_text and not imgs:
-             messagebox.showerror("ERROR", "NO CONTENT TO SAVE (TEXT OR IMAGES REQUIRED)")
-             return
-        
-        if len(imgs) > 4:
-            messagebox.showerror("ERROR", "IMAGE LIMIT EXCEEDED (MAX 4)")
-            return
+@app.route("/api/save", methods=["POST"])
+def api_save():
+    payload = {k: request.form.get(k, "").strip() for k in ["link", "comments", "reposts", "likes", "bookmarks", "views", "post_time", "record_time", "text"]}
+    files = request.files.getlist("files")
+    if not allowed_to_save(payload, files):
+        return jsonify({"success": False, "message": "必填项缺失，或素材不符合要求"})
+    post_id = normalize_post_id(payload["link"])
+    if not post_id:
+        return jsonify({"success": False, "message": "帖子链接格式不正确"})
+    save_dir = os.path.join(BASE_PATH, post_id)
+    os.makedirs(save_dir, exist_ok=True)
+    save_text_file(os.path.join(save_dir, "文案.txt"), payload.get("text", ""))
+    save_text_file(os.path.join(save_dir, "评论.txt"), payload.get("comments"))
+    save_text_file(os.path.join(save_dir, "转发.txt"), payload.get("reposts"))
+    save_text_file(os.path.join(save_dir, "点赞.txt"), payload.get("likes"))
+    save_text_file(os.path.join(save_dir, "收藏.txt"), payload.get("bookmarks"))
+    save_text_file(os.path.join(save_dir, "浏览量.txt"), payload.get("views"))
+    save_text_file(os.path.join(save_dir, "帖子发布时间.txt"), payload.get("post_time"))
+    save_text_file(os.path.join(save_dir, "数据记录时间.txt"), payload.get("record_time"))
+    for idx, f in enumerate(files):
+        ext = os.path.splitext(f.filename)[1] or ".jpg"
+        dest = os.path.join(save_dir, f"{idx+1}{ext}")
+        f.seek(0)
+        f.save(dest)
+    return jsonify({"success": True, "post_id": post_id})
 
-        save_dir = os.path.join(self.base_path, post_id)
-        if os.path.exists(save_dir):
-            if not messagebox.askyesno("CONFLICT", f"ID {post_id} EXISTS. OVERWRITE?"):
-                return
-            try: shutil.rmtree(save_dir)
-            except: pass
-        
-        try:
-            os.makedirs(save_dir, exist_ok=True)
-            
-            file_map = {
-                "文案.txt": final_text,
-                "评论.txt": data['comments'],
-                "转发.txt": data['reposts'],
-                "点赞.txt": data['likes'],
-                "收藏.txt": data['bookmarks'],
-                "浏览量.txt": data['views'],
-                "帖子发布时间.txt": data['post_time'],
-                "数据记录时间.txt": data['record_time']
-            }
-
-            for name, content in file_map.items():
-                if content:
-                    with open(os.path.join(save_dir, name), 'w', encoding='utf-8') as f:
-                        f.write(str(content))
-            
-            for idx, img_path in enumerate(imgs):
-                ext = os.path.splitext(img_path)[1]
-                dest = os.path.join(save_dir, f"{idx+1}{ext}")
-                shutil.copy2(img_path, dest)
-
-            self.log_system(f"DATA ARCHIVED SUCCESSFULLY: {post_id}")
-            self.clear_files()
-            self.text_area.delete("1.0", "end")
-            messagebox.showinfo("SUCCESS", "DATA SECURELY STORED")
-
-        except Exception as e:
-            self.log_system(f"WRITE ERROR: {str(e)}")
-            messagebox.showerror("CRITICAL ERROR", str(e))
-
-    def run_ai(self):
-        threading.Thread(target=self._ai_worker, daemon=True).start()
-
-    def _ai_worker(self):
-        self.log_system("INITIATING AI UPLINK...")
-        
-        manual_text = self.text_area.get("1.0", "end").strip()
-        imgs, file_text = self.get_assets()
-        current_text = (manual_text + "\n" + file_text).strip()
-        
-        if not current_text and not imgs:
-            self.log_system("ABORT: NO INPUT DATA FOR INFERENCE")
-            return
-
-        history_prompt = ""
-        try:
-            all_dirs = [os.path.join(self.base_path, d) for d in os.listdir(self.base_path)]
-            valid_dirs = [d for d in all_dirs if os.path.isdir(d)]
-            valid_dirs.sort(key=os.path.getmtime, reverse=True)
-            
-            history_data = []
-            for d in valid_dirs[:5]:
-                try:
-                    with open(os.path.join(d, "文案.txt"), 'r', encoding='utf-8') as f: t = f.read().strip()[:100]
-                    with open(os.path.join(d, "浏览量.txt"), 'r', encoding='utf-8') as f: v = f.read().strip()
-                    history_data.append(f"- Prev Post: '{t}' | Views: {v}")
-                except: continue
-            
-            if history_data:
-                history_prompt = "ANALYSIS OF ARCHIVED HIGH-PERFORMANCE DATA:\n" + "\n".join(history_data)
-        except Exception as e:
-            self.log_system(f"HISTORY RETRIEVAL FAILED: {e}")
-
-        prompt = f"""
-        SYSTEM INSTRUCTION: You are an advanced social media analytics AI.
-        TASK: Generate a viral post caption and predict view count.
-        
-        CONTEXT:
-        Current Time: {datetime.datetime.now()}
-        {history_prompt}
-        
-        INPUT DATA:
-        Text Segment: {current_text}
-        Image Count: {len(imgs)}
-        
-        REQUIREMENT:
-        1. Analyze the input images (if any) and text.
-        2. Write a compelling, sci-fi or modern style caption.
-        3. Estimate a realistic view count based on the 'Archived Data' trends.
-        """
-
-        payload = {
-            "model": "minicpm-v",
-            "prompt": prompt,
-            "stream": False
-        }
-
-        if imgs:
-            b64_imgs = []
-            for ip in imgs:
-                try:
-                    with open(ip, "rb") as ifile:
-                        b64_imgs.append(base64.b64encode(ifile.read()).decode('utf-8'))
-                except: pass
-            payload["images"] = b64_imgs
-
-        try:
-            self.log_system("SENDING PACKET TO NEURAL ENGINE (LOCALHOST:11434)...")
-            response = requests.post("http://localhost:11434/api/generate", json=payload, timeout=120)
-            
-            if response.status_code == 200:
-                res_json = response.json()
-                result_text = res_json.get("response", "NO DATA RECEIVED")
-                
-                self.log_system("INFERENCE COMPLETE. INCOMING TRANSMISSION:")
-                self.text_area.delete("1.0", "end")
-                self.text_area.insert("end", f"--- AI GENERATED CONTENT ---\n{result_text}\n----------------------------\n")
-                
-                if current_text:
-                    self.text_area.insert("end", f"\n[ORIGINAL INPUT]\n{current_text}")
-            else:
-                self.log_system(f"CONNECTION ERROR: HTTP {response.status_code}")
-                
-        except Exception as e:
-            self.log_system(f"FATAL ERROR IN AI THREAD: {str(e)}")
+def open_browser():
+    webbrowser.open("http://127.0.0.1:5000")
 
 if __name__ == "__main__":
-    app = CyberPunkApp()
-    app.mainloop()
+    threading.Timer(1.0, open_browser).start()
+    app.run(host="0.0.0.0", port=5000, debug=False)
