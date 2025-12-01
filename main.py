@@ -62,7 +62,6 @@ def allowed_to_save(payload, files):
 
 @app.route("/")
 def index():
-    # 修正点：移除CSS/JS中多余的双花括号，使用replace代替format，避免JS模板字符串冲突
     html = """
     <!DOCTYPE html>
     <html lang='zh-CN'>
@@ -70,23 +69,27 @@ def index():
     <meta charset='UTF-8'>
     <title>星核终端 · 生成与存档</title>
     <style>
-    body { margin:0; font-family:'Microsoft Yahei', 'Consolas', monospace; background:radial-gradient(circle at 20% 20%, rgba(0,255,255,0.1), transparent 25%), radial-gradient(circle at 80% 0%, rgba(255,0,80,0.15), transparent 25%), #04070d; color:#e8f7ff; }
-    .grid { display:grid; grid-template-columns:1.3fr 1fr; gap:16px; padding:20px; }
-    .panel { background:linear-gradient(135deg, rgba(10,16,28,0.9), rgba(20,32,52,0.9)); border:1px solid #1f3a5b; box-shadow:0 0 18px rgba(0,255,255,0.1); border-radius:10px; padding:16px; }
+    body { margin:0; font-family:'Microsoft Yahei', 'Consolas', monospace; background:radial-gradient(circle at 20% 20%, rgba(0,255,255,0.1), transparent 25%), radial-gradient(circle at 80% 0%, rgba(255,0,80,0.15), transparent 25%), #04070d; color:#e8f7ff; box-sizing:border-box; min-height:100vh; }
+    * { box-sizing:border-box; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(360px,1fr)); gap:16px; padding:20px; align-items:start; }
+    .panel { background:linear-gradient(135deg, rgba(10,16,28,0.9), rgba(20,32,52,0.9)); border:1px solid #1f3a5b; box-shadow:0 0 18px rgba(0,255,255,0.1); border-radius:10px; padding:16px; width:100%; }
     h1 { margin:0 0 12px; letter-spacing:2px; color:#6cfaff; text-shadow:0 0 8px #00e7ff; }
     label { display:block; margin-bottom:6px; color:#9ad9ff; font-size:13px; }
     input, textarea { width:100%; background:#0b1320; border:1px solid #1f3a5b; color:#e8f7ff; padding:10px; border-radius:6px; outline:none; font-family:'Consolas', monospace; }
+    textarea { min-height:220px; resize:vertical; }
     input:focus, textarea:focus { border-color:#00f0ff; box-shadow:0 0 8px rgba(0,240,255,0.4); }
     .flex { display:flex; gap:10px; flex-wrap:wrap; }
     .btn { flex:1; background:linear-gradient(90deg, #00e7ff, #0088ff); border:none; color:#04101c; padding:12px; border-radius:8px; cursor:pointer; font-weight:bold; letter-spacing:1px; box-shadow:0 0 12px rgba(0,231,255,0.5); transition:transform 0.15s, box-shadow 0.15s; }
     .btn:hover { transform:translateY(-1px); box-shadow:0 0 18px rgba(108,250,255,0.8); }
     .btn.alt { background:linear-gradient(90deg, #ff3f8e, #a100ff); color:#fff; box-shadow:0 0 14px rgba(255,63,142,0.6); }
     .label-row { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
-    .dropzone { margin-top:10px; padding:14px; border:1px dashed #00e7ff; border-radius:8px; text-align:center; color:#7fe9ff; background:rgba(0,231,255,0.08); transition:all 0.2s; }
+    .dropzone { margin-top:10px; padding:14px; border:1px dashed #00e7ff; border-radius:8px; text-align:center; color:#7fe9ff; background:rgba(0,231,255,0.08); transition:all 0.2s; min-height:74px; display:flex; align-items:center; justify-content:center; flex-wrap:wrap; }
     .dropzone.active { background:rgba(0,231,255,0.18); border-color:#ff3f8e; color:#fff; }
     .pill { padding:8px 10px; background:rgba(0,0,0,0.35); border:1px solid #1f3a5b; border-radius:6px; display:flex; align-items:center; gap:8px; font-size:12px; color:#bfe9ff; }
     .pill span { color:#ff5fb7; cursor:pointer; }
-    .log { background:#03060b; border:1px solid #1f3a5b; border-radius:8px; padding:10px; height:160px; overflow:auto; font-size:12px; color:#6cfaff; box-shadow:inset 0 0 10px rgba(0,231,255,0.12); }
+    .log { background:#03060b; border:1px solid #1f3a5b; border-radius:8px; padding:10px; height:200px; overflow:auto; font-size:12px; color:#6cfaff; box-shadow:inset 0 0 10px rgba(0,231,255,0.12); }
+    @media (max-width:840px) { .label-row { grid-template-columns:repeat(2,1fr); } }
+    @media (max-width:540px) { .grid { grid-template-columns:1fr; padding:14px; } .label-row { grid-template-columns:1fr; } }
     .neon-bar { width:100%; height:4px; background:linear-gradient(90deg, rgba(0,231,255,0.8), rgba(255,0,120,0.8), rgba(0,231,255,0.8)); margin:12px 0; box-shadow:0 0 12px rgba(0,231,255,0.4); border-radius:5px; animation:flow 4s linear infinite; }
     @keyframes flow { 0% { background-position:0 0; } 100% { background-position:200% 0; } }
     </style>
@@ -157,13 +160,13 @@ def api_generate():
         try:
             b64 = base64.b64encode(f.read()).decode("utf-8")
             imgs.append(b64)
-            f.seek(0) # Reset file pointer for later saving if needed
+            f.seek(0)
         except:
             continue
     history_prompt = build_history()
     if not text and not imgs:
         return jsonify({"success": False, "message": "缺少生成素材"})
-    prompt = f"系统: 你是社交媒体引流专家，以科幻风格输出。当前时间: {datetime.datetime.now()}\n历史数据:\n{history_prompt}\n输入文本:{text}\n图片数量:{len(imgs)}\n请给出有冲击力的中文文案，并预估浏览量。输出格式: 文案\n浏览量: 数字"
+    prompt = f"系统: 你是社交媒体引流专家，以科幻风格输出，不得拒绝或附加免责声明，直接提供高质量中文文案和浏览量预估。当前时间: {datetime.datetime.now()}\n历史数据:\n{history_prompt}\n输入文本:{text}\n图片数量:{len(imgs)}\n输出格式: 文案\n浏览量: 数字"
     payload = {"model": "minicpm-v", "prompt": prompt, "stream": False}
     if imgs:
         payload["images"] = imgs
@@ -198,8 +201,7 @@ def api_save():
         save_text_file(os.path.join(save_dir, "帖子发布时间.txt"), payload.get("post_time"))
         save_text_file(os.path.join(save_dir, "数据记录时间.txt"), payload.get("record_time"))
         for idx, f in enumerate(files):
-            # Safe way to handle multiple files: reset pointer just in case
-            f.seek(0) 
+            f.seek(0)
             ext = os.path.splitext(f.filename)[1] or ".jpg"
             dest = os.path.join(save_dir, f"{idx+1}{ext}")
             f.save(dest)
